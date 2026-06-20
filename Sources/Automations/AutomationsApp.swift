@@ -7,28 +7,47 @@ struct AutomationsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .frame(width: 720, height: 460)
+            ShellView()
+                .frame(minWidth: 960, minHeight: 620)
                 .preferredColorScheme(.dark)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .defaultSize(width: 960, height: 620)
     }
 }
 
-/// Switches between the palette and a single automation's output.
-struct RootView: View {
-    @State private var active: Automation?
+/// Top-level shell: sidebar navigation + section content.
+struct ShellView: View {
+    @State private var section: AppSection = .finance
+    @State private var financeStore = FinanceStore()
+    @State private var activeAutomation: Automation?
 
     var body: some View {
-        Group {
-            if let active {
-                OutputView(automation: active) { self.active = nil }
-            } else {
-                PaletteView(automations: Automation.catalog) { active = $0 }
+        HStack(spacing: 0) {
+            AppSidebar(selection: $section)
+            Group {
+                switch section {
+                case .finance:
+                    FinanceDashboardView(store: financeStore)
+                case .automations:
+                    automationsContent
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.canvas)
+        .onChange(of: section) { _, new in
+            if new == .finance { activeAutomation = nil }
+        }
+    }
+
+    @ViewBuilder
+    private var automationsContent: some View {
+        if let activeAutomation {
+            OutputView(automation: activeAutomation) { self.activeAutomation = nil }
+        } else {
+            PaletteView(automations: Automation.catalog) { activeAutomation = $0 }
+        }
     }
 }
 

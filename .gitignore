@@ -3,3 +3,7 @@
 .DS_Store
 .swiftpm/
 xcuserdata/
+backend/node_modules/
+backend/.env
+backend/.data/
+backend/certs/
