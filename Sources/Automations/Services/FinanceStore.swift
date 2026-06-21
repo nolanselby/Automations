@@ -4,59 +4,102 @@ import Observation
 @MainActor
 @Observable
 final class FinanceStore {
-    var connection: FinanceConnectionStatus?
     var spending: SpendingSnapshot?
-    var isLoading = false
-    var isConnecting = false
-    var backendOnline = false
+    var summary: ImportSummary?
+    var isImporting = false
+    var isCategorizing = false
     var errorMessage: String?
+    /// Transient feedback after an import, e.g. "Added 42, skipped 12 duplicates".
+    var lastImportMessage: String?
 
-    private let api = FinanceAPIClient.shared
+    var hasData: Bool { spending != nil }
+    var hasAIKey: Bool { AppConfig.hasOpenAIKey }
 
-    func refresh() async {
-        isLoading = true
+    private let db: TransactionDB?
+
+    init() {
+        db = try? TransactionDB()
+    }
+
+    func loadPersisted() {
+        refreshFromDB(lastFile: nil)
+    }
+
+    func importFile(url: URL) async {
+        guard let db else { errorMessage = "Could not open the local database."; return }
+        isImporting = true
         errorMessage = nil
-        defer { isLoading = false }
+        lastImportMessage = nil
+        defer { isImporting = false }
 
         do {
-            backendOnline = try await api.health()
-            connection = try await api.connectionStatus()
-            if connection?.connected == true {
-                spending = try await api.fetchSpending()
-            } else {
-                spending = nil
-            }
+            let parsed = try await Task.detached(priority: .userInitiated) {
+                try TransactionImporter.parse(from: url)
+            }.value
+            let delta = try await Task.detached(priority: .userInitiated) {
+                try db.importTransactions(parsed.transactions, sourceFile: parsed.fileName)
+            }.value
+            lastImportMessage = "Added \(delta.added), skipped \(delta.skipped) duplicate\(delta.skipped == 1 ? "" : "s")"
+            refreshFromDB(lastFile: parsed.fileName)
         } catch {
             errorMessage = error.localizedDescription
-            if case FinanceAPIError.backendUnavailable = error {
-                backendOnline = false
-            }
+            return
+        }
+
+        if hasAIKey { await categorizeWithAI() }
+    }
+
+    func categorizeWithAI() async {
+        guard let db else { return }
+        isCategorizing = true
+        errorMessage = nil
+        defer { isCategorizing = false }
+
+        do {
+            let pending = try await Task.detached(priority: .userInitiated) {
+                try db.merchantsNeedingCategory()
+            }.value
+            guard !pending.isEmpty else { return }
+
+            let map = try await AICategorizer().classify(pending, categories: SpendingCategories.all)
+            try await Task.detached(priority: .userInitiated) {
+                try db.applyCategories(map, source: "ai")
+            }.value
+            refreshFromDB(lastFile: summary?.fileName)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
-    func connectWellsFargo() async {
-        isConnecting = true
-        errorMessage = nil
-        defer { isConnecting = false }
-
+    /// Manual correction: set the category for a merchant and remember it (source = manual).
+    /// Applies to every transaction from that merchant and persists to the learning table.
+    func correctCategory(forMerchantNamed name: String, to category: String) async {
+        guard let db else { return }
+        let key = RawTransaction.merchantKey(for: name)
         do {
-            backendOnline = try await api.health()
-            _ = try await PlaidLinkFlow.connect(api: api)
-            await refresh()
+            try await Task.detached(priority: .userInitiated) {
+                try db.applyCategories([key: category], source: "manual")
+            }.value
+            refreshFromDB(lastFile: summary?.fileName)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func disconnect() async {
-        isLoading = true
+    func clear() {
+        try? db?.clearTransactions()
+        spending = nil
+        summary = nil
+        lastImportMessage = nil
         errorMessage = nil
-        defer { isLoading = false }
+    }
 
+    private func refreshFromDB(lastFile: String?) {
+        guard let db else { return }
         do {
-            try await api.disconnect()
-            connection = FinanceConnectionStatus(connected: false, institutionName: nil, itemId: nil, lastSyncedAt: nil)
-            spending = nil
+            let summary = try db.buildSummary(lastFile: lastFile)
+            self.summary = summary
+            spending = summary == nil ? nil : try db.buildSnapshot()
         } catch {
             errorMessage = error.localizedDescription
         }

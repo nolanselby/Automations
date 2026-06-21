@@ -10,14 +10,16 @@ struct FinanceDashboardView: View {
             header
             Divider().overlay(Theme.hairline)
 
-            if store.connection?.connected == true, let spending = store.spending {
-                SpendingContentView(spending: spending)
+            if let spending = store.spending {
+                SpendingContentView(spending: spending) { merchant, category in
+                    Task { await store.correctCategory(forMerchantNamed: merchant, to: category) }
+                }
             } else {
-                ConnectBankView(store: store)
+                ImportTransactionsView(store: store)
             }
         }
         .background(Theme.canvas)
-        .task { await store.refresh() }
+        .onAppear { store.loadPersisted() }
     }
 
     private var header: some View {
@@ -26,28 +28,45 @@ struct FinanceDashboardView: View {
                 Text("Grimy Grills")
                     .font(.inter(20, weight: .semibold))
                     .foregroundStyle(Theme.ink)
-                Text("Spending")
+                Text(subtitle)
                     .font(.inter(13))
                     .foregroundStyle(Theme.mute)
+                if let message = store.lastImportMessage {
+                    Text(message)
+                        .font(.inter(11, weight: .medium))
+                        .foregroundStyle(Theme.accentGreen)
+                }
             }
             Spacer()
 
-            if store.connection?.connected == true {
-                if let name = store.connection?.institutionName {
-                    Text(name)
-                        .font(.inter(12))
-                        .foregroundStyle(Theme.mute)
+            if store.hasData {
+                if store.hasAIKey {
+                    ActionButton(
+                        title: store.isCategorizing ? "Categorizing…" : "Categorize with AI",
+                        symbol: "sparkles",
+                        isLoading: store.isCategorizing
+                    ) {
+                        Task { await store.categorizeWithAI() }
+                    }
                 }
-                ActionButton(title: "Refresh", symbol: "arrow.clockwise", isLoading: store.isLoading) {
-                    Task { await store.refresh() }
+                ActionButton(title: "Re-import", symbol: "arrow.clockwise", isLoading: store.isImporting) {
+                    guard let url = FinanceImport.pickFile() else { return }
+                    Task { await store.importFile(url: url) }
                 }
-                ActionButton(title: "Disconnect", symbol: "link.badge.minus", destructive: true) {
-                    Task { await store.disconnect() }
+                ActionButton(title: "Clear", symbol: "trash", destructive: true) {
+                    store.clear()
                 }
             }
         }
         .padding(.horizontal, Theme.Space.lg)
         .padding(.vertical, Theme.Space.md)
+    }
+
+    private var subtitle: String {
+        guard let summary = store.summary else { return "Spending" }
+        let range = [summary.earliestDate, summary.latestDate].compactMap { $0 }
+        let span = range.count == 2 ? " · \(range[0]) → \(range[1])" : ""
+        return "Spending · \(summary.transactionCount) transactions\(span)"
     }
 }
 

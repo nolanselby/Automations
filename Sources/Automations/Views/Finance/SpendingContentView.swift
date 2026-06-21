@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SpendingContentView: View {
     let spending: SpendingSnapshot
+    /// Called when the user reassigns a transaction's category (merchant name, new category).
+    var onCorrect: (String, String) -> Void = { _, _ in }
 
     var body: some View {
         ScrollView {
@@ -19,12 +21,12 @@ struct SpendingContentView: View {
             MetricCard(
                 title: "Total going out",
                 value: formatCurrency(spending.totalSpending),
-                footnote: "\(spending.transactionCount) transactions synced"
+                footnote: "\(spending.transactionCount) transactions in database"
             )
             MetricCard(
                 title: "Categories",
                 value: "\(spending.categories.count)",
-                footnote: "Plaid default groups (custom rules next)"
+                footnote: "AI-categorized"
             )
         }
     }
@@ -50,7 +52,7 @@ struct SpendingContentView: View {
             sectionTitle("Recent outflows")
             VStack(spacing: 2) {
                 ForEach(spending.recent) { txn in
-                    TransactionRow(transaction: txn)
+                    TransactionRow(transaction: txn, onCorrect: onCorrect)
                 }
             }
         }
@@ -154,6 +156,7 @@ private struct CategoryRow: View {
 
 private struct TransactionRow: View {
     let transaction: BankTransaction
+    var onCorrect: (String, String) -> Void = { _, _ in }
     @State private var hovered = false
 
     var body: some View {
@@ -166,9 +169,7 @@ private struct TransactionRow: View {
                     Text(transaction.date)
                         .font(.inter(11))
                         .foregroundStyle(Theme.ash)
-                    Text(transaction.category)
-                        .font(.inter(11))
-                        .foregroundStyle(Theme.mute)
+                    categoryMenu
                     if transaction.pending {
                         Text("Pending")
                             .font(.inter(10, weight: .medium))
@@ -188,6 +189,42 @@ private struct TransactionRow: View {
                 .fill(hovered ? Theme.surfaceCard : .clear)
         )
         .onHover { hovered = $0 }
+    }
+
+    /// Clickable category chip — reassigning it corrects every transaction from this
+    /// merchant and teaches the learning table.
+    private var categoryMenu: some View {
+        Menu {
+            ForEach(SpendingCategories.names, id: \.self) { name in
+                Button {
+                    if name != transaction.category { onCorrect(transaction.name, name) }
+                } label: {
+                    if name == transaction.category {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(transaction.category)
+                    .font(.inter(11))
+                    .foregroundStyle(Theme.mute)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+                    .foregroundStyle(Theme.ash)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                    .fill(hovered ? Theme.surfaceElevated : .clear)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     private func formatCurrency(_ value: Double) -> String {

@@ -5,7 +5,7 @@ import AppKit
 enum PlaidLinkFlow {
     static func connect(api: FinanceAPIClient = .shared) async throws -> LinkCompleteResponse {
         let token = try await api.createLinkToken()
-        guard let url = URL(string: token.hostedLinkURL) else {
+        guard let url = URL(string: token.hostedLinkUrl) else {
             throw FinanceAPIError.invalidURL
         }
 
